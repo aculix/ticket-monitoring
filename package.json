@@ -1,0 +1,19 @@
+{
+  "name": "ticket-monitoring",
+  "version": "1.0.0",
+  "description": "Watches district.in showtimes and sends a phone notification the moment tickets for a specific movie, date, format and cinema go on sale.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js --loop",
+    "check": "node --env-file-if-exists=.env src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "fetch-socks": "^1.3.3",
+    "undici": "^8.10.0"
+  }
+}

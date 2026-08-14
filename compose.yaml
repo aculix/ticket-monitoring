@@ -1,0 +1,11 @@
+services:
+  monitor:
+    build: .
+    image: ticket-monitoring
+    container_name: ticket-monitoring
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"      # status endpoint; drop this line to keep it private
+    volumes:
+      - ./data:/data     # state survives restarts, so you aren't re-alerted
