@@ -55,7 +55,7 @@ export function loadConfig() {
 
     // runtime
     statePath: process.env.STATE_PATH || "./state.json",
-    port: num("PORT", 8080),
+    port: num("PORT", 4733),
     proxyUrl: process.env.PROXY_URL || "",
     dispatcher: null, // set by attachProxy() when PROXY_URL is present
   };

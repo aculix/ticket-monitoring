@@ -1,11 +1,13 @@
 services:
   monitor:
+    # Pulls the prebuilt multi-arch image. Run `docker compose up --build` instead
+    # to build from this checkout; the result gets tagged with the same name.
+    image: ghcr.io/aculix/ticket-monitoring:latest
     build: .
-    image: ticket-monitoring
     container_name: ticket-monitoring
     restart: unless-stopped
     env_file: .env
     ports:
-      - "8080:8080"      # status endpoint; drop this line to keep it private
+      - "4733:4733"      # status endpoint; drop this line to keep it private
     volumes:
       - ./data:/data     # state survives restarts, so you aren't re-alerted

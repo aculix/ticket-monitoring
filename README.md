@@ -1,5 +1,7 @@
 # ticket-monitoring
 
+[![docker](https://github.com/aculix/ticket-monitoring/actions/workflows/docker.yml/badge.svg)](https://github.com/aculix/ticket-monitoring/actions/workflows/docker.yml)
+
 Watches [district.in](https://www.district.in) showtimes and sends a max-priority push to your
 phone the second tickets go on sale for the movie, date, format and cinema you care about.
 
@@ -36,17 +38,52 @@ Shows added later still get through.
 
 The [ntfy app](https://ntfy.sh/#subscribe-phone) on your phone, and either Docker or Node.js 22+.
 
-## Quick start with Docker
+## Quickest start: run the published image
+
+A prebuilt image is published to GitHub Container Registry on every push to `main`, for both
+`linux/amd64` and `linux/arm64`. It runs as-is on a normal server, an Apple Silicon Mac or a
+Raspberry Pi, with nothing to clone and nothing to build.
+
+Grab [`.env.example`](.env.example), save it as `.env`, fill it in using "Finding your IDs" below,
+then:
+
+```bash
+docker run -d --name ticket-monitoring \
+  --restart unless-stopped \
+  --env-file .env \
+  -p 4733:4733 \
+  -v ticket-monitoring-data:/data \
+  ghcr.io/aculix/ticket-monitoring:latest
+```
+
+```bash
+docker logs -f ticket-monitoring
+```
+
+You want to see `tick: closed  failures: 0` scrolling past once a minute.
+
+The volume is what stops it re-alerting you about shows it already found, so keep it around across
+restarts. Drop the `-p` flag if you don't want the status endpoint reachable. To update, pull the
+image again and recreate the container:
+
+```bash
+docker pull ghcr.io/aculix/ticket-monitoring:latest
+docker rm -f ticket-monitoring   # then re-run the docker run command above
+```
+
+Only `:latest` is published, so that's always the current build of `main`.
+
+## Quick start with Docker Compose
+
+Handy if you'd rather keep the config in a file you can edit in place:
 
 ```bash
 git clone https://github.com/aculix/ticket-monitoring.git
 cd ticket-monitoring
 cp .env.example .env      # edit it, see "Finding your IDs" below
-docker compose up -d --build
+docker compose up -d      # add --build to build locally instead of pulling
 docker compose logs -f
 ```
-
-You want to see `tick: closed  failures: 0` scrolling past once a minute.
 
 ## Quick start without Docker
 
@@ -110,16 +147,20 @@ Everything is environment variables. `.env` is only a convenient place to put th
 | `CURRENCY` | `₹` | Price prefix |
 | `EXPIRY_UTC` | *auto* | When to retire. Defaults to local midnight after `TARGET_DATE`. |
 | `STATE_PATH` | `./state.json` | Where dedupe state lives, `/data/state.json` in Docker |
-| `PORT` | `8080` | Status endpoint |
+| `PORT` | `4733` | Status endpoint |
 | `PROXY_URL` | | SOCKS5 proxy for the site checks, see below |
 
 ## Status endpoint
 
-While running continuously it serves JSON on `PORT`:
+While running continuously it serves JSON on `PORT`, which defaults to 4733:
 
 - `/` gives you state, `lastTick` and `proxied`
 - `/?force=1` adds a live check right now, with no notifications and no state changes
 - `/healthz` returns `{"ok":true}`
+
+```bash
+curl -s localhost:4733/ | jq
+```
 
 Watch `lastTick.at`. If it's more than a couple of minutes old, the loop is stuck.
 
