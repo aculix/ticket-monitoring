@@ -18,9 +18,13 @@ let client = null;
 async function getClient(cfg) {
   if (client) return client;
   if (!Impit) ({ Impit } = await import("impit"));
+  // With socks5:// impit resolves DNS locally and asks the proxy for that address,
+  // which fails outright on an IPv6-only exit that cannot reach the IPv4 we picked.
+  // socks5h:// leaves resolution to the proxy, so normalize to it.
+  const proxyUrl = cfg.proxyUrl ? cfg.proxyUrl.replace(/^socks5:\/\//i, "socks5h://") : "";
   client = new Impit({
     browser: "chrome",
-    ...(cfg.proxyUrl ? { proxyUrl: cfg.proxyUrl } : {}),
+    ...(proxyUrl ? { proxyUrl } : {}),
   });
   return client;
 }

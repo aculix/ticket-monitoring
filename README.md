@@ -181,7 +181,7 @@ with comments in [`.env.example`](.env.example).
 | `EXPIRY_UTC` | *auto* | When to retire. Defaults to local midnight after `TARGET_DATE`. |
 | `STATE_PATH` | `./state.json` | Where dedupe state lives, `/data/state.json` in Docker |
 | `PORT` | `4733` | Status endpoint |
-| `PROXY_URL` | | SOCKS5 proxy for District checks, see below |
+| `PROXY_URL` | | SOCKS5 proxy for both sites' checks, see below |
 
 v1 used flat names (`MOVIE_CODE`, `CINEMA_ID` and friends) for District. Those still work, so an
 existing `.env` keeps running unchanged.
@@ -210,13 +210,21 @@ permanently, while a home connection was never touched once. Either run it from 
 connection, or point `PROXY_URL` at a SOCKS5 proxy. Only the site checks go through the proxy.
 Notifications stay direct, so your alerts don't depend on it.
 
+One gotcha if your proxy is IPv6-only: a `socks5://` URL makes some clients resolve DNS locally
+and hand the proxy an IPv4 address it cannot reach. The monitor rewrites the scheme to `socks5h://`
+so the proxy does the resolving, which fixes that and changes nothing for other proxies.
+
 ### BookMyShow returns HTTP 403
 
-BookMyShow blocks on the TLS fingerprint of the client, not on your IP, which is why plain
-`curl` and Node's `fetch` both get 403 no matter which headers or cookies you send. A proxy
-won't help either. This is handled with [impit](https://github.com/apify/impit), which performs
-the request with a real Chrome fingerprint. If you see 403s here, the impersonation has probably
-stopped matching, so try updating the image or `npm update impit`.
+BookMyShow blocks on two things at once. First the TLS fingerprint of the client, which is why
+plain `curl` and Node's `fetch` get 403 no matter which headers or cookies you send. That part is
+handled by [impit](https://github.com/apify/impit), which performs the request with a real Chrome
+fingerprint. Second your IP, if it belongs to a datacenter: BookMyShow 403s cloud hosts even with
+a perfect fingerprint, which I confirmed from GitHub Actions runners.
+
+So on a cloud host you need both, and setting `PROXY_URL` covers the second half. If you are still
+getting 403s from a residential connection, the impersonation has probably stopped matching the
+current Chrome, so update the image or run `npm update impit`.
 
 ### ntfy returns HTTP 429
 

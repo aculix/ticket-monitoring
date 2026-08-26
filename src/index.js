@@ -33,9 +33,11 @@ function writeState(cfg, state) {
 
 /**
  * Routes provider requests through a SOCKS5 proxy. Notifications stay direct, so the
- * alerting path never depends on the proxy. District needs this on datacenter hosts whose
- * IP the WAF blocks. It does nothing for BookMyShow, which blocks on TLS fingerprint
- * rather than IP; impit handles that instead.
+ * alerting path never depends on the proxy.
+ *
+ * Both sites block datacenter IPs, so a cloud host generally needs this for both. It is
+ * only half the story for BookMyShow, which also blocks on TLS fingerprint: impit deals
+ * with the fingerprint, the proxy deals with the IP, and BMS needs both.
  */
 async function attachProxy(cfg) {
   if (!cfg.proxyUrl) return;
