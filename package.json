@@ -1,6 +1,6 @@
 {
   "name": "ticket-monitoring",
-  "version": "2.0.0",
+  "version": "1.1.0",
   "description": "Watches district.in and BookMyShow showtimes and sends a phone notification the moment tickets for a specific movie, date, format and cinema go on sale.",
   "license": "MIT",
   "type": "module",
