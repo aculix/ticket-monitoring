@@ -39,6 +39,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build amd64 first and actually start it. The native TLS-impersonation binary
+      # only fails at runtime, so a plain build would happily publish a broken image.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ticket-monitoring:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        run: |
+          docker run --rm ticket-monitoring:smoke \
+            node -e "import('impit').then(m => { if (!m.Impit) { throw new Error('impit missing'); } console.log('impit loaded'); })"
+          docker run --rm --env-file smoke.env ticket-monitoring:smoke \
+            node src/index.js 2>&1 | tee /tmp/smoke.log
+          grep -q "\[district\]" /tmp/smoke.log
+          grep -q "\[bookmyshow\]" /tmp/smoke.log
+
       - uses: docker/build-push-action@v6
         with:
           context: .

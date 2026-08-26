@@ -3,7 +3,11 @@
 Why this is built the way it is, and what broke along the way. Useful if you're forking it,
 or writing something similar against a different site.
 
-## The API
+Two sites are supported. Each lives in `src/providers/` and exposes the same two functions,
+`check()` and `extract()`, returning sessions in one normalized shape. Everything above that
+layer, including the alert state machine, has no idea which site a session came from.
+
+## District: the API
 
 District's movie pages are server-rendered Next.js, but showtimes load client-side from:
 
@@ -29,9 +33,42 @@ Findings that shaped the design:
   `204` while closed, the daily heartbeat makes one extra call for *today* purely to report how
   far ahead bookings currently run. That probe is best-effort and never counts as a failure.
 
+## BookMyShow: the API
+
+```
+GET /api/movies-data/v5/showtimes-by-event/primary-dynamic
+      ?etCodes=<ET code>&dateCode=YYYYMMDD&regionCode=AHD
+      &isDesktop=true&xLocationShared=false&memberId=&lsId=&subCode=
+      &appCode=WEB&refEventCode=<ET code>[&language=hindi]
+```
+
+Sent with `x-region-code`, `x-region-slug`, `x-latitude`, `x-longitude`, `x-app-code: WEB` and
+an `x-bms-id` that, like District's guest token, the web client makes up locally.
+
+- **Cloudflare blocks on TLS fingerprint, not IP or headers.** curl and Node's `fetch` both get
+  403 with a byte-perfect copy of the browser's headers, and no `cf_clearance` cookie is involved,
+  so there is nothing to copy across. A proxy does not help either, since the block happens during
+  the TLS handshake. [impit](https://github.com/apify/impit) performs the request with a real
+  Chrome fingerprint and returns 200. It ships prebuilt binaries for linux x64 and arm64 in both
+  gnu and musl flavours, which is what keeps the Alpine image and the arm64 build working.
+- **There is no 204.** A date that is not on sale answers 200 with a short body containing only
+  `header`, `additionalData` and `addOnWidgets`. The tell is that `data.showtimeWidgets` is
+  absent, so "closed" is a property of the payload rather than the status code.
+- **A past or invalid date returns 400**, which counts as a failure rather than "closed". That is
+  deliberate: it means something is wrong with the configuration, and you should hear about it.
+- **Sessions are buried in generic UI widgets.** Venue cards sit several layers down inside
+  `showtimeWidgets`, so the parser walks the tree looking for `type: "venue-card"` instead of
+  indexing through fixed positions, which would break the moment BMS reorders its layout.
+- **Seat detail lives in a bottom sheet.** Each showtime carries a `customGestureCTA` describing
+  the panel shown on double-tap, and that is the only place per-tier prices appear. BMS reports
+  availability as words (`AVAILABLE`, `FILLING FAST`, `ALMOST FULL`) and never as exact counts,
+  unlike District, so the normalized session leaves `avail` and `total` null and alert lines omit
+  the seat figures for this site.
+- **Times are already local**, so unlike District's UTC timestamps they are passed through as-is.
+
 ## Alert state machine
 
-`decide()` in `src/monitor.js` is pure: state in, `{ baseState, alerts }` out. That makes every
+`decideProvider()` in `src/monitor.js` is pure: state in, `{ baseState, alerts }` out. That makes every
 edge case testable without network or clock mocking, and it's where the interesting rules live.
 
 - **Publish before persist.** Each alert carries its own `statePatch`, merged only after that
@@ -45,9 +82,13 @@ edge case testable without network or clock mocking, and it's where the interest
 - **State is written only when it actually changed.** Originally this ran on Cloudflare KV with a
   1,000 writes/day free limit against 1,440 daily ticks, which forced the discipline; it's still
   the right behaviour on a filesystem.
+- **State is namespaced per site.** Each provider gets its own dedupe map, failure counter and
+  BROKEN flag under `state.providers.<key>`, so the same session id can alert once per site and a
+  site going down never marks the other as broken. Retirement and the daily heartbeat are the only
+  tick-level decisions, and they live in `decideGlobal()`.
 
 The guiding rule throughout: **degrade toward duplicate notifications, never toward silence.**
-Every failure path — unreadable state, failed push, failed write — errs that way.
+Every failure path, whether it is unreadable state, a failed push or a failed write, errs that way.
 
 ## What broke in production
 

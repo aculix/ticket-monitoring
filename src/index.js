@@ -1,18 +1,20 @@
 #!/usr/bin/env node
-// Entry point. Runs one check (default) or loops forever with a status server (--loop).
+// Entry point. Runs one check across every configured provider (default), or loops
+// forever with a status server (--loop).
 import { createServer } from "node:http";
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadConfig } from "./config.js";
+import { localDate } from "./lib.js";
 import {
-  decide, defaultState, extractSessions, checkDistrict, notify, heartbeatDue, localDate,
+  decideProvider, decideGlobal, defaultState, providerState, heartbeatDue, notify,
 } from "./monitor.js";
 
 const ts = () => new Date().toISOString();
 
-// Last tick's outcome, surfaced by the status server. Persisted state records only
+// Last tick per provider, surfaced by the status server. Persisted state records only
 // transitions, so "is it ticking right now" has to live in memory.
-const lastTick = { at: null, kind: null, reason: null };
+const lastTick = {};
 
 function readState(cfg) {
   try {
@@ -30,9 +32,10 @@ function writeState(cfg, state) {
 }
 
 /**
- * Routes District requests through a SOCKS5 proxy. Notifications stay direct, so the
- * alerting path never depends on the proxy. Needed on datacenter hosts whose IPs the
- * site's WAF blocks.
+ * Routes provider requests through a SOCKS5 proxy. Notifications stay direct, so the
+ * alerting path never depends on the proxy. District needs this on datacenter hosts whose
+ * IP the WAF blocks. It does nothing for BookMyShow, which blocks on TLS fingerprint
+ * rather than IP; impit handles that instead.
  */
 async function attachProxy(cfg) {
   if (!cfg.proxyUrl) return;
@@ -51,49 +54,81 @@ async function attachProxy(cfg) {
   console.log(ts(), `checks routed via SOCKS5 ${u.hostname}:${u.port}`);
 }
 
+/** Check one provider and return its alerts plus the next sub-state. */
+async function tickProvider(cfg, p, state, now) {
+  const pstate = providerState(state, p.key);
+
+  // Best-effort daily probe, only from providers that support it and only on the
+  // heartbeat tick. Its failure never counts toward the failure streak.
+  let probeMax = null;
+  if (p.module.probeShowDates && heartbeatDue(state, now, cfg) && !pstate.brokenAlerted) {
+    try {
+      probeMax = await p.module.probeShowDates(cfg, p, localDate(now, cfg.tzOffsetMinutes));
+    } catch (err) {
+      console.error(ts(), `[${p.key}] showDates probe failed (best-effort):`, err.message);
+    }
+  }
+
+  let input;
+  try {
+    const res = await p.module.check(cfg, p, cfg.targetDate);
+    input = res.kind === "open"
+      ? { kind: "open", extract: p.module.extract(res.data, cfg, p), now, probeMax }
+      : { kind: "closed", now, probeMax };
+  } catch (err) {
+    input = { kind: "error", reason: String(err.message ?? err), now, probeMax };
+  }
+
+  const { baseState, alerts } = decideProvider(pstate, input, cfg, p);
+  lastTick[p.key] = { at: ts(), kind: input.kind, reason: input.reason ?? null };
+  const matched = input.extract?.matched?.length ?? 0;
+  console.log(ts(), `[${p.key}] ${input.kind}${input.reason ? ` (${input.reason})` : ""}`,
+    `| matched: ${matched} | failures: ${baseState.failures}`);
+  return { pstate: baseState, alerts, input };
+}
+
 export async function tick(cfg) {
   const now = new Date();
   const state = readState(cfg);
   if (state.retired) return "retired";
 
-  let input;
-  if (now.getTime() >= Date.parse(cfg.expiryUtc)) {
-    input = { kind: "closed", now }; // decide() retires before it looks at kind
-  } else {
-    // Best-effort daily probe: showDates only exists in a 200 body, and the target date
-    // returns an empty 204 while closed. Its failure never counts toward the streak.
-    let probeMax = null;
-    if (heartbeatDue(state, now, cfg) && !state.brokenAlerted) {
-      try {
-        const probe = await checkDistrict(cfg, localDate(now, cfg.tzOffsetMinutes));
-        if (probe.kind === "open") {
-          const dates = probe.data?.meta?.showDates ?? [];
-          if (dates.length) probeMax = dates.slice().sort().at(-1);
-        }
-      } catch (err) {
-        console.error(ts(), "showDates probe failed (best-effort):", err.message);
-      }
-    }
+  const merged = structuredClone(state);
+  merged.providers ??= {};
+  const summaries = [];
+  const expired = now.getTime() >= Date.parse(cfg.expiryUtc);
+
+  const send = async (alert, apply) => {
     try {
-      const res = await checkDistrict(cfg, cfg.targetDate);
-      input = res.kind === "open"
-        ? { kind: "open", extract: extractSessions(res.data, cfg), now, probeMax }
-        : { kind: "closed", now, probeMax };
+      await notify(cfg, alert);
+      apply();
+      console.log(ts(), "alert sent:", alert.title);
     } catch (err) {
-      input = { kind: "error", reason: String(err.message ?? err), now, probeMax };
+      // Patch not applied, so the push is retried on the next tick.
+      console.error(ts(), `notify failed for "${alert.title}" (will retry):`, err.message);
+    }
+  };
+
+  if (!expired) {
+    for (const p of cfg.providers) {
+      const { pstate, alerts, input } = await tickProvider(cfg, p, state, now);
+      merged.providers[p.key] = pstate;
+      for (const alert of alerts) {
+        await send(alert, () => {
+          merged.providers[p.key] = { ...merged.providers[p.key], ...alert.statePatch };
+        });
+      }
+      summaries.push({
+        label: p.label,
+        kind: input.kind === "error" ? "checks failing" : merged.providers[p.key].lastGood?.kind,
+        showDatesMax: merged.providers[p.key].lastGood?.showDatesMax,
+      });
     }
   }
 
-  const { baseState, alerts } = decide(state, input, cfg);
-  let merged = baseState;
-  for (const alert of alerts) {
-    try {
-      await notify(cfg, alert);
-      merged = { ...merged, ...alert.statePatch };
-      console.log(ts(), "alert sent:", alert.title);
-    } catch (err) {
-      console.error(ts(), `notify failed for "${alert.title}" (will retry next tick):`, err.message);
-    }
+  const global = decideGlobal(state, cfg, now, summaries);
+  Object.assign(merged, global.baseState, { providers: merged.providers });
+  for (const alert of global.alerts) {
+    await send(alert, () => Object.assign(merged, alert.statePatch));
   }
 
   if (JSON.stringify(merged) !== JSON.stringify(state)) {
@@ -104,12 +139,7 @@ export async function tick(cfg) {
       console.error(ts(), "state write failed (may duplicate pushes):", err.message);
     }
   }
-
-  lastTick.at = ts();
-  lastTick.kind = input.kind;
-  lastTick.reason = input.reason ?? null;
-  console.log(ts(), "tick:", input.kind, input.kind === "error" ? `(${input.reason})` : "", "failures:", merged.failures);
-  return input.kind;
+  return merged.retired ? "retired" : "ok";
 }
 
 function startStatusServer(cfg) {
@@ -125,6 +155,7 @@ function startStatusServer(cfg) {
       const out = {
         now: ts(),
         targetDate: cfg.targetDate,
+        providers: cfg.providers.map((p) => p.key),
         proxied: Boolean(cfg.dispatcher),
         retired: state.retired,
         lastTick,
@@ -132,13 +163,16 @@ function startStatusServer(cfg) {
       };
       if (url.searchParams.get("force") === "1") {
         // Side-effect-free: no state writes, no notifications.
-        try {
-          const r = await checkDistrict(cfg, cfg.targetDate);
-          out.live = r.kind === "open"
-            ? { kind: "open", ...extractSessions(r.data, cfg) }
-            : { kind: "closed" };
-        } catch (err) {
-          out.live = { kind: "error", reason: String(err.message ?? err) };
+        out.live = {};
+        for (const p of cfg.providers) {
+          try {
+            const r = await p.module.check(cfg, p, cfg.targetDate);
+            out.live[p.key] = r.kind === "open"
+              ? { kind: "open", ...p.module.extract(r.data, cfg, p) }
+              : { kind: "closed" };
+          } catch (err) {
+            out.live[p.key] = { kind: "error", reason: String(err.message ?? err) };
+          }
         }
       }
       send(200, out);
@@ -153,12 +187,13 @@ await attachProxy(cfg);
 
 if (process.argv.includes("--loop")) {
   startStatusServer(cfg);
-  console.log(ts(), `watching ${cfg.targetDate} every ${cfg.intervalMs / 1000}s (expires ${cfg.expiryUtc})`);
+  console.log(ts(), `watching ${cfg.targetDate} on ${cfg.providers.map((p) => p.label).join(" + ")}`,
+    `every ${cfg.intervalMs / 1000}s (expires ${cfg.expiryUtc})`);
   for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => process.exit(0));
   for (;;) {
-    const kind = await tick(cfg).catch((err) => { console.error(ts(), "tick crashed:", err); return "crash"; });
-    if (kind === "retired") break;
-    await new Promise((r) => setTimeout(r, cfg.intervalMs));
+    const r = await tick(cfg).catch((err) => { console.error(ts(), "tick crashed:", err); return "crash"; });
+    if (r === "retired") break;
+    await new Promise((r2) => setTimeout(r2, cfg.intervalMs));
   }
 } else {
   await tick(cfg);
