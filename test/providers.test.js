@@ -104,3 +104,31 @@ test("bookmyshow: a not-yet-on-sale response has no widgets and extracts to noth
   assert.deepEqual(bms.extract(closed, CFG, B_PARAMS),
     { matched: [], other: [], cinemaCount: 0, sessionCount: 0, showDates: [] });
 });
+
+// The 400 branch decides between "waiting for a listing" and "something is wrong",
+// so it is worth pinning without a network.
+test("district: 400 code 32 is a waiting state, other 400s are failures", async () => {
+  const realFetch = globalThis.fetch;
+  const stub = (status, body) => {
+    globalThis.fetch = async () => ({ status, json: async () => body });
+  };
+  const p = { movieCode: "X", contentId: "1", cityKey: "c", lat: "1", lng: "2" };
+  try {
+    stub(400, { errors: [], msg: "Content not found", code: 32 });
+    const waiting = await district.check({}, p, "2026-09-25");
+    assert.equal(waiting.kind, "closed");
+    assert.match(waiting.note, /not listed yet/, "the reason must survive for the heartbeat");
+
+    stub(400, { errors: [], msg: "Mandatory search params are missing", code: 3 });
+    await assert.rejects(() => district.check({}, p, "2026-09-25"), /Mandatory search params/,
+      "a real config error must still raise the failure streak");
+
+    stub(500, {});
+    await assert.rejects(() => district.check({}, p, "2026-09-25"), /HTTP 500/);
+
+    stub(204, {});
+    assert.equal((await district.check({}, p, "2026-09-25")).kind, "closed");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

@@ -56,6 +56,22 @@ export async function check(cfg, p, date) {
       throw new CheckError(`unparseable 200 body: ${err.message}`);
     }
   }
+  // A film announced but not yet given showtimes answers 400 "Content not found"
+  // (code 32). That is a waiting state, not a fault, so it must not raise the failure
+  // streak. A typo'd content id looks identical, so the reason is carried through to
+  // the status endpoint and the daily heartbeat rather than being swallowed.
+  if (res.status === 400) {
+    let body = null;
+    try {
+      body = await res.json();
+    } catch {
+      // fall through to the generic error below
+    }
+    if (body?.code === 32) {
+      return { kind: "closed", note: "not listed yet (District: content not found)" };
+    }
+    if (body?.msg) throw new CheckError(`HTTP 400: ${body.msg}`);
+  }
   throw new CheckError(`HTTP ${res.status}`);
 }
 

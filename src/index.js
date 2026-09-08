@@ -76,15 +76,15 @@ async function tickProvider(cfg, p, state, now) {
     const res = await p.module.check(cfg, p, cfg.targetDate);
     input = res.kind === "open"
       ? { kind: "open", extract: p.module.extract(res.data, cfg, p), now, probeMax }
-      : { kind: "closed", now, probeMax };
+      : { kind: "closed", now, probeMax, note: res.note ?? null };
   } catch (err) {
     input = { kind: "error", reason: String(err.message ?? err), now, probeMax };
   }
 
   const { baseState, alerts } = decideProvider(pstate, input, cfg, p);
-  lastTick[p.key] = { at: ts(), kind: input.kind, reason: input.reason ?? null };
+  lastTick[p.key] = { at: ts(), kind: input.kind, reason: input.reason ?? input.note ?? null };
   const matched = input.extract?.matched?.length ?? 0;
-  console.log(ts(), `[${p.key}] ${input.kind}${input.reason ? ` (${input.reason})` : ""}`,
+  console.log(ts(), `[${p.key}] ${input.kind}${input.reason || input.note ? ` (${input.reason ?? input.note})` : ""}`,
     `| matched: ${matched} | failures: ${baseState.failures}`);
   return { pstate: baseState, alerts, input };
 }
@@ -123,6 +123,7 @@ export async function tick(cfg) {
         label: p.label,
         kind: input.kind === "error" ? "checks failing" : merged.providers[p.key].lastGood?.kind,
         showDatesMax: merged.providers[p.key].lastGood?.showDatesMax,
+        note: merged.providers[p.key].lastGood?.note,
       });
     }
   }

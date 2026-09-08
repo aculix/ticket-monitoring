@@ -73,8 +73,9 @@ export function decideProvider(pstate, input, cfg, p) {
 
   const ex = input.kind === "open" ? input.extract : null;
   const effectiveKind = ex && ex.sessionCount > 0 ? "open" : "closed"; // open-but-empty = closed
-  if (base.lastGood?.kind !== effectiveKind) {
-    base.lastGood = { ...(base.lastGood ?? {}), kind: effectiveKind, at: now.toISOString() };
+  const note = input.note ?? null;
+  if (base.lastGood?.kind !== effectiveKind || base.lastGood?.note !== note) {
+    base.lastGood = { ...(base.lastGood ?? {}), kind: effectiveKind, note, at: now.toISOString() };
   }
 
   if (effectiveKind === "open") {
@@ -131,7 +132,8 @@ export function decideGlobal(state, cfg, now, summaries) {
 
   if (heartbeatDue(state, now, cfg)) {
     const lines = summaries.map((s) =>
-      `${s.label}: ${s.kind ?? "unknown"}${s.showDatesMax ? ` (open through ${s.showDatesMax})` : ""}`);
+      `${s.label}: ${s.kind ?? "unknown"}${s.note ? `, ${s.note}` : ""}` +
+      `${s.showDatesMax ? ` (open through ${s.showDatesMax})` : ""}`);
     alerts.push({
       title: `Still watching ${cfg.targetDate}`,
       priority: "1",

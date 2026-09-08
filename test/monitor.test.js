@@ -190,3 +190,25 @@ test("retirement takes precedence over the heartbeat", () => {
   assert.equal(d.alerts.length, 1);
   assert.ok(d.alerts[0].title.includes("retired"));
 });
+
+test("a 'not listed yet' note rides through to lastGood and the heartbeat", () => {
+  const d = decideProvider(defaultProviderState(),
+    { kind: "closed", now: T0, note: "not listed yet (District: content not found)" }, CFG, P);
+  assert.equal(d.alerts.length, 0, "waiting for a listing is not an alert");
+  assert.equal(d.baseState.lastGood.kind, "closed");
+  assert.match(d.baseState.lastGood.note, /not listed yet/);
+
+  const hb = decideGlobal(defaultState(), CFG, HB, [
+    { label: "District", kind: "closed", note: "not listed yet (District: content not found)" },
+    { label: "BookMyShow", kind: "closed" },
+  ]);
+  assert.match(hb.alerts[0].body, /District: closed, not listed yet/,
+    "the daily heartbeat must say why District sees nothing, or silence is ambiguous");
+  assert.match(hb.alerts[0].body, /BookMyShow: closed$/m);
+});
+
+test("clearing the note is itself a state change, so the status endpoint stops lying", () => {
+  const withNote = decideProvider(defaultProviderState(), { kind: "closed", now: T0, note: "not listed yet" }, CFG, P).baseState;
+  const after = decideProvider(withNote, { kind: "closed", now: T0 }, CFG, P);
+  assert.equal(after.baseState.lastGood.note, null, "note is dropped once the listing appears");
+});
