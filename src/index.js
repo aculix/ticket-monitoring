@@ -158,7 +158,14 @@ function startStatusServer(cfg) {
       const out = {
         now: ts(),
         targetDate: cfg.targetDate,
-        providers: cfg.providers.map((p) => p.key),
+        // What each site is actually watching. Without this, a misconfigured id or an
+        // unexpectedly narrow filter is indistinguishable from "nothing on sale yet".
+        watching: Object.fromEntries(cfg.providers.map((p) => [p.key, {
+          movie: p.contentId ?? p.eventCode,
+          variant: p.movieCode || p.language || "(any language/format variant)",
+          venue: p.venueId || "(any venue)",
+          format: [p.formatTag, p.formatMatch].filter(Boolean).join(" or ") || "(any format)",
+        }])),
         proxied: Boolean(cfg.dispatcher),
         retired: state.retired,
         lastTick,
