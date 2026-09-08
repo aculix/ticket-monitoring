@@ -22,36 +22,50 @@ const num = (name, fallback) => {
   return n;
 };
 
-/** Old single-provider variable names, still honoured so v1 .env files keep working. */
-function legacyDistrict() {
-  if (!process.env.MOVIE_CODE || process.env.DISTRICT_MOVIE_CODE) return null;
-  return {
-    movieCode: env("MOVIE_CODE"),
-    contentId: env("CONTENT_ID"),
-    cityKey: env("CITY_KEY"),
-    lat: env("LAT"),
-    lng: env("LNG"),
-    venueId: env("CINEMA_ID"),
-    formatTag: process.env.FORMAT_TAG ?? "imax_2d",
-    formatMatch: process.env.FORMAT_MATCH ?? "IMAX",
-    bookingUrl: env("BOOKING_URL"),
-  };
+/**
+ * District settings. v1 used flat names (MOVIE_CODE, CINEMA_ID and so on) and those are
+ * still honoured, but per field, so a stale leftover cannot override a DISTRICT_* value
+ * that was set deliberately. Enabled by the content id, since the movie code is optional.
+ */
+const LEGACY = {
+  DISTRICT_MOVIE_CODE: "MOVIE_CODE",
+  DISTRICT_CONTENT_ID: "CONTENT_ID",
+  DISTRICT_CITY_KEY: "CITY_KEY",
+  DISTRICT_LAT: "LAT",
+  DISTRICT_LNG: "LNG",
+  DISTRICT_CINEMA_ID: "CINEMA_ID",
+  DISTRICT_FORMAT_TAG: "FORMAT_TAG",
+  DISTRICT_FORMAT_MATCH: "FORMAT_MATCH",
+  DISTRICT_BOOKING_URL: "BOOKING_URL",
+};
+
+const pick = (name) => process.env[name] ?? process.env[LEGACY[name]];
+
+export function legacyNamesInUse() {
+  return Object.entries(LEGACY)
+    .filter(([nu, old]) => process.env[nu] === undefined && process.env[old] !== undefined)
+    .map(([, old]) => old);
 }
 
 function districtConfig() {
-  const legacy = legacyDistrict();
-  if (legacy) return legacy;
-  if (!process.env.DISTRICT_MOVIE_CODE) return null;
+  const contentId = pick("DISTRICT_CONTENT_ID");
+  if (!contentId) return null; // District not configured
+  const need = (name) => {
+    const v = pick(name);
+    if (!v) throw new Error(`${name} is required when District is configured (see .env.example)`);
+    return v;
+  };
   return {
-    movieCode: required("DISTRICT_MOVIE_CODE"),
-    contentId: required("DISTRICT_CONTENT_ID"),
-    cityKey: required("DISTRICT_CITY_KEY"),
-    lat: required("DISTRICT_LAT"),
-    lng: required("DISTRICT_LNG"),
-    venueId: env("DISTRICT_CINEMA_ID"),
-    formatTag: process.env.DISTRICT_FORMAT_TAG ?? "imax_2d",
-    formatMatch: process.env.DISTRICT_FORMAT_MATCH ?? "IMAX",
-    bookingUrl: env("DISTRICT_BOOKING_URL"),
+    // Optional: District answers without it, and an unreleased film has no format code yet.
+    movieCode: pick("DISTRICT_MOVIE_CODE") ?? "",
+    contentId,
+    cityKey: need("DISTRICT_CITY_KEY"),
+    lat: need("DISTRICT_LAT"),
+    lng: need("DISTRICT_LNG"),
+    venueId: pick("DISTRICT_CINEMA_ID") ?? "",
+    formatTag: pick("DISTRICT_FORMAT_TAG") ?? "imax_2d",
+    formatMatch: pick("DISTRICT_FORMAT_MATCH") ?? "IMAX",
+    bookingUrl: pick("DISTRICT_BOOKING_URL") ?? "",
   };
 }
 
@@ -83,6 +97,10 @@ export function loadConfig() {
     new Date(Date.parse(`${targetDate}T00:00:00Z`) + 86400000 - tzOffsetMinutes * 60000).toISOString();
 
   const built = { district: districtConfig(), bookmyshow: bookmyshowConfig() };
+  const stale = legacyNamesInUse();
+  if (stale.length) {
+    console.warn(`warning: using v1 variable names ${stale.join(", ")}. Rename them to DISTRICT_* to avoid confusion.`);
+  }
   // PROVIDERS is an explicit allow-list; without it, every configured provider runs.
   const wanted = env("PROVIDERS").split(",").map((s) => s.trim()).filter(Boolean);
   for (const w of wanted) {
@@ -90,7 +108,7 @@ export function loadConfig() {
   }
   const keys = (wanted.length ? wanted : Object.keys(built)).filter((k) => built[k]);
   if (!keys.length) {
-    throw new Error("No provider configured. Set DISTRICT_MOVIE_CODE and/or BMS_EVENT_CODE (see .env.example)");
+    throw new Error("No provider configured. Set DISTRICT_CONTENT_ID and/or BMS_EVENT_CODE (see .env.example)");
   }
   for (const w of wanted) {
     if (!built[w]) throw new Error(`PROVIDERS lists "${w}" but its settings are missing (see .env.example)`);

@@ -106,7 +106,7 @@ support.
 ## Finding your IDs
 
 Configure either site, or both. Skip a site by leaving its main ID unset: no
-`DISTRICT_MOVIE_CODE` means District isn't watched, no `BMS_EVENT_CODE` means BookMyShow isn't.
+`DISTRICT_CONTENT_ID` means District isn't watched, no `BMS_EVENT_CODE` means BookMyShow isn't.
 
 ### District
 
@@ -118,7 +118,9 @@ https://www.district.in/movies/the-odyssey-movie-tickets-in-ahmedabad-MV187151?f
 ```
 
 - `DISTRICT_CONTENT_ID` is the number after `MV`
-- `DISTRICT_MOVIE_CODE` is the `frmtid` parameter, which pins down the movie *and* the language
+- `DISTRICT_MOVIE_CODE` is the `frmtid` parameter, which pins down the movie *and* the language.
+  It's optional, and a film that hasn't been given showtimes yet doesn't have one, so leave it
+  empty when you're waiting on an unreleased title.
 - `DISTRICT_CITY_KEY` is the city slug in the path
 - `DISTRICT_LAT` and `DISTRICT_LNG` can be any coordinates inside that city. The API refuses to
   answer without them, though results are city-wide either way.
@@ -159,7 +161,8 @@ with comments in [`.env.example`](.env.example).
 |---|---|---|
 | `TARGET_DATE` | *required* | The date you're waiting for, `YYYY-MM-DD` |
 | `NTFY_TOPIC` | *required* | The topic you subscribe to. Treat it like a password. |
-| `DISTRICT_MOVIE_CODE` | | Set to watch District. Plus `DISTRICT_CONTENT_ID`, `DISTRICT_CITY_KEY`, `DISTRICT_LAT`, `DISTRICT_LNG` |
+| `DISTRICT_CONTENT_ID` | | Set to watch District. Plus `DISTRICT_CITY_KEY`, `DISTRICT_LAT`, `DISTRICT_LNG` |
+| `DISTRICT_MOVIE_CODE` | *(any variant)* | Optional `frmtid` to pin one language/format |
 | `DISTRICT_CINEMA_ID` | *(any)* | Restrict District to one cinema |
 | `DISTRICT_FORMAT_TAG` | `imax_2d` | Session tag that counts as a match |
 | `DISTRICT_FORMAT_MATCH` | `IMAX` | Screen-format substring that counts as a match |
@@ -184,7 +187,8 @@ with comments in [`.env.example`](.env.example).
 | `PROXY_URL` | | SOCKS5 proxy for both sites' checks, see below |
 
 v1 used flat names (`MOVIE_CODE`, `CINEMA_ID` and friends) for District. Those still work, so an
-existing `.env` keeps running unchanged.
+existing `.env` keeps running unchanged. They're read per field, so a `DISTRICT_*` value you set
+deliberately always wins over a leftover flat one, and the log warns when any flat name is in use.
 
 ## Status endpoint
 

@@ -132,3 +132,34 @@ test("district: 400 code 32 is a waiting state, other 400s are failures", async 
     globalThis.fetch = realFetch;
   }
 });
+
+// A leftover v1 name silently overriding a DISTRICT_* value that was set on purpose is
+// the worst kind of config bug: the monitor watches the wrong film and still says "closed".
+test("config: DISTRICT_* wins per field over leftover v1 names", async () => {
+  const { loadConfig, legacyNamesInUse } = await import("../src/config.js");
+  const saved = { ...process.env };
+  try {
+    Object.assign(process.env, {
+      TARGET_DATE: "2026-09-25", NTFY_TOPIC: "t",
+      MOVIE_CODE: "OLDCODE", CONTENT_ID: "187151", CITY_KEY: "ahmedabad",
+      LAT: "23.03", LNG: "72.57", CINEMA_ID: "1032362",
+      DISTRICT_CONTENT_ID: "227928", DISTRICT_CINEMA_ID: "",
+      BMS_EVENT_CODE: "ET1", BMS_REGION_CODE: "AHD",
+    });
+    const d = loadConfig().providers.find((p) => p.key === "district");
+    assert.equal(d.contentId, "227928", "the explicitly set new name must win");
+    assert.equal(d.venueId, "", "an explicitly emptied new name must not fall back to the old one");
+    assert.equal(d.movieCode, "OLDCODE", "fields with no new value still inherit");
+    assert.ok(legacyNamesInUse().includes("MOVIE_CODE"), "and the leftovers are reported");
+
+    delete process.env.DISTRICT_CONTENT_ID;
+    delete process.env.CONTENT_ID;
+    const only = loadConfig().providers;
+    assert.equal(only.find((p) => p.key === "district"), undefined,
+      "no content id means District is simply not watched");
+    assert.equal(only.length, 1, "and the other site carries on alone");
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
+});
