@@ -212,3 +212,93 @@ test("clearing the note is itself a state change, so the status endpoint stops l
   const after = decideProvider(withNote, { kind: "closed", now: T0 }, CFG, P);
   assert.equal(after.baseState.lastGood.note, null, "note is dropped once the listing appears");
 });
+
+// ------------------------------------------------ withdrawn and re-listed shows
+//
+// Cinemas publish early, pull the shows, then re-list them, often under the same
+// session ids. If dedupe outlives the listing, the re-listing (the moment bookings
+// really open) is silent. These pin down when a vanished session is forgotten.
+
+const closed = (now = T0) => ({ kind: "closed", now });
+const tick = (state, input, p = P) => apply(state, decideProvider(state, input, CFG, p));
+
+test("a withdrawn session that comes back after 3 missed checks alerts again", () => {
+  let s = tick(defaultProviderState(), openInput(EX_MATCH));
+  assert.ok(s.sidsAlerted["111"], "alerted once");
+  for (let i = 0; i < 3; i++) s = tick(s, closed());
+  assert.equal(s.sidsAlerted["111"], undefined, "forgotten after 3 checks without it");
+
+  const back = decideProvider(s, openInput(EX_MATCH), CFG, P);
+  assert.equal(back.alerts.length, 1, "the re-listing must alert");
+  assert.equal(back.alerts[0].priority, "5");
+});
+
+test("a session missing for fewer than 3 checks is not re-alerted", () => {
+  let s = tick(defaultProviderState(), openInput(EX_MATCH));
+  s = tick(s, closed());
+  s = tick(s, closed());
+  const back = decideProvider(s, openInput(EX_MATCH), CFG, P);
+  assert.equal(back.alerts.length, 0, "a brief flicker in the response is not a new listing");
+  assert.deepEqual(apply(s, back).missing, {}, "and the miss counter resets once it is seen again");
+});
+
+test("a fully withdrawn date re-arms after 3 closed checks and says so, once", () => {
+  let s = tick(defaultProviderState(), openInput(EX_MATCH));
+  assert.equal(s.dateOpenAlerted, true);
+  s = tick(s, closed());
+  s = tick(s, closed());
+  const third = decideProvider(s, closed(), CFG, P);
+  const notice = third.alerts.find((a) => /withdrawn/i.test(a.title));
+  assert.ok(notice, "the user should hear that the shows were pulled");
+  assert.ok(notice.title.includes("District"));
+  assert.ok(Number(notice.priority) < 5, "informational, not a booking alert");
+  s = apply(s, third);
+  assert.equal(s.dateOpenAlerted, false, "re-armed");
+
+  for (let i = 0; i < 5; i++) {
+    assert.equal(decideProvider(s, closed(), CFG, P).alerts.length, 0, "the notice is not repeated");
+    s = tick(s, closed());
+  }
+});
+
+test("the re-arm does not depend on the withdrawal notice being delivered", () => {
+  let s = tick(defaultProviderState(), openInput(EX_MATCH));
+  s = tick(s, closed());
+  s = tick(s, closed());
+  const third = decideProvider(s, closed(), CFG, P);
+  s = third.baseState; // ntfy was down: no alert patches merged
+  assert.equal(s.dateOpenAlerted, false, "re-arming is not gated on the push");
+  assert.equal(s.sidsAlerted["111"], undefined);
+  assert.equal(decideProvider(s, openInput(EX_MATCH), CFG, P).alerts[0].priority, "5",
+    "so a re-listing still gets through even if the notice was lost");
+});
+
+test("partial withdrawal forgets only the missing session, with no withdrawal notice", () => {
+  const two = { ...EX_MATCH, matched: [EX_MATCH.matched[0], { ...EX_MATCH.matched[0], sid: "222", time: "1:15 PM" }] };
+  let s = tick(defaultProviderState(), openInput(two));
+  for (let i = 0; i < 3; i++) {
+    const d = decideProvider(s, openInput(EX_MATCH), CFG, P); // 222 gone, date still open
+    assert.equal(d.alerts.filter((a) => /withdrawn/i.test(a.title)).length, 0);
+    s = apply(s, d);
+  }
+  assert.ok(s.sidsAlerted["111"], "the session still listed stays deduped");
+  assert.equal(s.sidsAlerted["222"], undefined, "the pulled one is forgotten");
+
+  const back = decideProvider(s, openInput(two), CFG, P);
+  assert.equal(back.alerts.length, 1);
+  assert.ok(back.alerts[0].body.includes("1:15 PM"), "only the returning session is announced");
+  assert.ok(!back.alerts[0].body.includes("9:00 AM"));
+});
+
+test("failed checks do not count as a session being missing", () => {
+  let s = tick(defaultProviderState(), openInput(EX_MATCH));
+  for (let i = 0; i < 5; i++) s = tick(s, { kind: "error", reason: "HTTP 403", now: T0 });
+  assert.ok(s.sidsAlerted["111"], "an outage says nothing about whether the show still exists");
+  assert.equal(decideProvider(s, openInput(EX_MATCH), CFG, P).alerts.filter((a) => a.priority === "5").length, 0);
+});
+
+test("waiting on a date that never opened writes no state", () => {
+  let s = tick(defaultProviderState(), closed());
+  const next = decideProvider(s, closed(), CFG, P);
+  assert.equal(JSON.stringify(apply(s, next)), JSON.stringify(s), "no counters ticking while nothing was ever alerted");
+});

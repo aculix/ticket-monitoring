@@ -28,12 +28,14 @@ daily heartbeat. A monitor that died at 3am and one that's quietly working shoul
 same from the outside.
 
 Alerts are deduplicated by session id, so you hear about each show once. Shows added later still
-get through.
+get through, and so do shows that were pulled and re-listed: a show missing for three checks in a
+row is forgotten, so its return alerts you again.
 
 | Notification | Priority | What it means |
 |---|---|---|
 | `<FORMAT> <DATE> OPEN on <SITE> - BOOK NOW` | max | The one you're waiting for. Tap it to book. |
 | `<DATE> is OPEN on <SITE> (no <FORMAT> yet)` | high | Date opened, your format hasn't shown up yet. |
+| `<DATE> shows withdrawn on <SITE>` | default | Shows you were alerted about were pulled. Re-armed for their return. |
 | `<SITE> checks BROKEN - check manually` | high | That site's checks are failing. Don't trust the silence. |
 | `<SITE> checks recovered` | default | Back to normal. |
 | `Still watching <DATE>` | min | Daily heartbeat, with a line per site. |
@@ -253,7 +255,7 @@ Run `npm run check` for a single noisy check. Configuration problems are reporte
 ## Development
 
 ```bash
-npm test        # 24 tests, no network needed
+npm test        # 35 tests, no network needed
 ```
 
 The tests run the alert state machine and both site parsers against real captured API responses

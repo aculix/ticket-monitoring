@@ -75,6 +75,14 @@ edge case testable without network or clock mocking, and it's where the interest
   alert's push succeeds. A failed notification retries on the next tick instead of being silently
   recorded as delivered.
 - **Dedupe by session id, not a boolean.** Shows added after the first alert still notify you.
+- **Dedupe does not outlive the listing.** Cinemas publish early, pull the shows and re-list
+  them, often under the same session ids, and this really happened with the Endgame release. A
+  show missing for three consecutive successful checks is forgotten, so its return alerts again.
+  Three rather than one, so a single flaky response can't cause a duplicate max-priority push,
+  and failed checks don't count, since an outage says nothing about whether a show exists. If
+  the whole date goes dark after opening, a separate notice says the shows were withdrawn. The
+  re-arm itself lives in the base state, not in that notice's patch, so it happens even if the
+  notice fails to deliver.
 - **`dateOpenAlerted` rides an alert patch, never the base state.** Otherwise a failed push
   followed by sessions disappearing could swallow the only notification you'd ever get.
 - **Open-but-empty counts as closed**, defending against a `200` with no sessions.

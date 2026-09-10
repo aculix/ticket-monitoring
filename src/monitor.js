@@ -2,8 +2,18 @@
 // Providers supply normalized sessions; nothing here knows which site they came from.
 import { localDate, localMinutes } from "./lib.js";
 
+/**
+ * Consecutive successful checks a previously announced show must be absent before it is
+ * forgotten. Counting checks, rather than reacting to one miss, stops a single flaky
+ * response from turning into a duplicate max-priority push.
+ */
+export const REARM_AFTER = 3;
+
 export function defaultProviderState() {
-  return { dateOpenAlerted: false, sidsAlerted: {}, failures: 0, brokenAlerted: false, lastGood: null };
+  return {
+    dateOpenAlerted: false, sidsAlerted: {}, missing: {}, closedTicks: 0,
+    failures: 0, brokenAlerted: false, lastGood: null,
+  };
 }
 
 export function defaultState() {
@@ -78,12 +88,53 @@ export function decideProvider(pstate, input, cfg, p) {
     base.lastGood = { ...(base.lastGood ?? {}), kind: effectiveKind, note, at: now.toISOString() };
   }
 
+  // Cinemas publish early, pull the shows and re-list them, often under the same session
+  // ids. Dedupe must not outlive the listing, or the re-listing is silent. So a show that
+  // stays missing for REARM_AFTER checks is forgotten, and its return alerts again. This
+  // lives in the base state rather than an alert patch: re-arming must not depend on a
+  // notification getting through.
+  const present = new Set(effectiveKind === "open" ? ex.matched.map((s) => s.sid) : []);
+  const alerted = { ...(pstate.sidsAlerted ?? {}) };
+  const missing = { ...(pstate.missing ?? {}) };
+  for (const sid of Object.keys(alerted)) {
+    if (present.has(sid)) {
+      delete missing[sid];
+    } else if ((missing[sid] = (missing[sid] ?? 0) + 1) >= REARM_AFTER) {
+      delete alerted[sid];
+      delete missing[sid];
+    }
+  }
+  for (const sid of Object.keys(missing)) if (!(sid in alerted)) delete missing[sid];
+  base.sidsAlerted = alerted;
+  base.missing = missing;
+
+  // The whole date going dark after it opened is worth saying out loud: the user may be
+  // mid-booking and wondering where the shows went. Counted the same way, then re-armed.
+  if (effectiveKind === "closed" && pstate.dateOpenAlerted) {
+    base.closedTicks = (pstate.closedTicks ?? 0) + 1;
+    if (base.closedTicks >= REARM_AFTER) {
+      base.dateOpenAlerted = false;
+      base.closedTicks = 0;
+      alerts.push(tag({
+        title: `${cfg.targetDate} shows withdrawn on ${p.label}`,
+        priority: "3",
+        tags: "arrows_counterclockwise",
+        click: p.bookingUrl,
+        body: `${p.label} is no longer listing shows for ${cfg.targetDate}. The monitor has re-armed, so you'll get a max-priority push again the moment they come back.`,
+        statePatch: {},
+      }));
+    }
+  } else if (pstate.closedTicks) {
+    base.closedTicks = 0;
+  }
+
   if (effectiveKind === "open") {
-    const fresh = ex.matched.filter((s) => !pstate.sidsAlerted?.[s.sid]);
+    const fresh = ex.matched.filter((s) => !alerted[s.sid]);
     if (fresh.length > 0) {
       const lines = fresh.map(sessionLine);
       for (const s of ex.other) lines.push(`Also at ${s.cinema}: ${s.time}`);
-      const sidsAlerted = { ...pstate.sidsAlerted };
+      // Built from the post-forget map, so the patch can't resurrect a forgotten id.
+      const sidsAlerted = { ...alerted };
       for (const s of fresh) sidsAlerted[s.sid] = true;
       alerts.push(tag({
         title: `${cfg.formatLabel} ${cfg.targetDate} OPEN on ${p.label} - BOOK NOW`,
@@ -93,7 +144,7 @@ export function decideProvider(pstate, input, cfg, p) {
         body: lines.join("\n\n"),
         statePatch: { sidsAlerted, dateOpenAlerted: true },
       }));
-    } else if (!pstate.dateOpenAlerted && ex.matched.length === 0) {
+    } else if (!base.dateOpenAlerted && ex.matched.length === 0) {
       alerts.push(tag({
         title: `${cfg.targetDate} is OPEN on ${p.label} (no ${cfg.formatLabel} yet)`,
         priority: "4",
